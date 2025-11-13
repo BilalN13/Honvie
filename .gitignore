@@ -1,0 +1,11 @@
+build/
+.dart_tool/
+.idea/
+.vscode/
+.fleet/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.DS_Store
+*.iml
+.env
