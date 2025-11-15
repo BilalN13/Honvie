@@ -3,7 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'core/supabase_client.dart';
 import 'features/auth/presentation/auth_page.dart';
-import 'features/home/presentation/home_page.dart';
+import 'features/root/honvie_scaffold.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -50,7 +50,7 @@ class _AuthGateState extends State<AuthGate> {
     if (_session == null) {
       return const AuthPage();
     } else {
-      return const HomePage();
+      return const HonvieScaffold();
     }
   }
 }

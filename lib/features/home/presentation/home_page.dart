@@ -74,12 +74,14 @@ class _HomePageState extends State<HomePage> {
   String? _selectedMood;
   Map<String, dynamic>? _todayChallenge;
   bool _completed = false;
+  bool _isLoadingChallenge = true;
+  String? _challengeError;
 
   @override
   void initState() {
     super.initState();
     _loadMood();
-    _loadChallenge();
+    _loadDailyChallenge();
     _loadCompletion();
   }
 
@@ -93,7 +95,12 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  Future<void> _loadChallenge() async {
+  Future<void> _loadDailyChallenge() async {
+    setState(() {
+      _isLoadingChallenge = true;
+      _challengeError = null;
+    });
+
     try {
       var challenge = await _challengeService.getTodayChallenge();
       if (challenge == null) {
@@ -109,10 +116,23 @@ class _HomePageState extends State<HomePage> {
       }
 
       if (!mounted) return;
-      setState(() => _todayChallenge = challenge);
-    } catch (_) {
+      setState(() {
+        _todayChallenge = challenge;
+      });
+    } catch (e, s) {
+      // ignore: avoid_print
+      print('Error loading daily challenge: $e\n$s');
+
       if (!mounted) return;
-      setState(() => _todayChallenge = null);
+      setState(() {
+        _challengeError = "Impossible de charger le défi du jour.";
+        _todayChallenge = null;
+      });
+    } finally {
+      if (!mounted) return;
+      setState(() {
+        _isLoadingChallenge = false;
+      });
     }
   }
 
@@ -165,6 +185,41 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+
+  Widget _buildDailyChallengeSection() {
+    if (_isLoadingChallenge) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.symmetric(vertical: 24),
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+
+    if (_challengeError != null) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+        child: Text(
+          _challengeError!,
+          style: const TextStyle(color: Colors.redAccent),
+        ),
+      );
+    }
+
+    if (_todayChallenge == null) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+        child: Text("Pas de défi programmé pour aujourd'hui."),
+      );
+    }
+
+    return _DailyChallengeSection(
+      challenge: _todayChallenge!,
+      completed: _completed,
+      onPressed: _onChallengePressed,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -182,11 +237,7 @@ class _HomePageState extends State<HomePage> {
                 onMoodSelected: _onMoodSelected,
               ),
               const SizedBox(height: 32),
-              _DailyChallengeSection(
-                challenge: _todayChallenge,
-                completed: _completed,
-                onPressed: _onChallengePressed,
-              ),
+              _buildDailyChallengeSection(),
               const SizedBox(height: 32),
               const _PlacesSection(),
             ],
@@ -357,25 +408,18 @@ class _DailyChallengeSection extends StatelessWidget {
     required this.onPressed,
   });
 
-  final Map<String, dynamic>? challenge;
+  final Map<String, dynamic> challenge;
   final bool completed;
   final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
-    if (challenge == null) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 32),
-        child: Center(child: CircularProgressIndicator()),
-      );
-    }
-
-    final difficulty = (challenge?['difficulty'] as String?) ?? 'facile';
-    final title = (challenge?['title'] as String?) ?? 'Défi du jour';
-    final description = (challenge?['description'] as String?) ??
+    final difficulty = (challenge['difficulty'] as String?) ?? 'facile';
+    final title = (challenge['title'] as String?) ?? 'Défi du jour';
+    final description = (challenge['description'] as String?) ??
         'Prenez un moment pour vous aujourd\'hui.';
-    final duration = challenge?['duration_minutes'];
-    final category = (challenge?['category'] as String?) ?? 'Méditation';
+    final duration = challenge['duration_minutes'];
+    final category = (challenge['category'] as String?) ?? 'Méditation';
 
     return Container(
       width: double.infinity,

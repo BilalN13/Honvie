@@ -1,0 +1,1124 @@
+import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+import 'package:honvie/features/community/data/community_service.dart';
+
+const Map<String, String> kMoodEmojis = {
+  'Joyeux': '😀',
+  'Serein': '😌',
+  'Triste': '😢',
+  'Stressé': '😰',
+  'Reconnaissant': '🙏',
+};
+
+String moodLabel(String mood) {
+  final emoji = kMoodEmojis[mood];
+  return emoji != null ? '$emoji $mood' : mood;
+}
+
+class CommunityPage extends StatefulWidget {
+  const CommunityPage({super.key});
+
+  @override
+  State<CommunityPage> createState() => _CommunityPageState();
+}
+
+class _CommunityPageState extends State<CommunityPage> {
+  final CommunityService _service = const CommunityService();
+  late Future<List<Map<String, dynamic>>> _postsFuture;
+  List<Map<String, dynamic>> _posts = [];
+  final Map<String, bool> _likedByUser = {};
+  final Map<String, List<Map<String, dynamic>>> _commentsByPost = {};
+  final Map<String, bool> _isLoadingComments = {};
+  final TextEditingController _titleController = TextEditingController();
+  final TextEditingController _contentController = TextEditingController();
+  String _selectedMood = 'Joyeux';
+  bool _isAnonymous = true;
+  bool _isSubmitting = false;
+
+  Future<void> _openCommentsSheet(Map<String, dynamic> post) async {
+    final postId = post['id']?.toString();
+    if (postId == null) return;
+
+    setState(() {
+      _isLoadingComments[postId] = true;
+    });
+
+    try {
+      final comments = await _service.getCommentsForPost(postId);
+      if (!mounted) return;
+
+      _commentsByPost[postId] = comments;
+
+      await showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (context) {
+          return _CommentsSheet(
+            post: post,
+            initialComments: comments,
+            onAddComment: (newComment) {
+              setState(() {
+                _commentsByPost.putIfAbsent(postId, () => []);
+                _commentsByPost[postId]!.insert(0, newComment);
+
+                final index = _posts.indexWhere((p) => p['id'] == postId);
+                if (index != -1) {
+                  final current = (_posts[index]['comments_count'] ?? 0) as int;
+                  _posts[index]['comments_count'] = current + 1;
+                }
+              });
+            },
+            onDeleteComment: (deletedComment) {
+              setState(() {
+                if (_commentsByPost.containsKey(postId)) {
+                  _commentsByPost[postId]!.removeWhere(
+                    (c) => c['id'] == deletedComment['id'],
+                  );
+                }
+
+                final index = _posts.indexWhere((p) => p['id'] == postId);
+                if (index != -1) {
+                  final current = (_posts[index]['comments_count'] ?? 0) as int;
+                  final next = (current - 1).clamp(0, 1 << 31);
+                  _posts[index]['comments_count'] = next;
+                }
+              });
+            },
+          );
+        },
+      );
+    } catch (error, stackTrace) {
+      debugPrint('Error opening comments sheet: $error\n$stackTrace');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Impossible de charger les commentaires.'),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingComments[postId] = false;
+        });
+      }
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _postsFuture = _fetchPosts();
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _contentController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadPosts() async {
+    final future = _fetchPosts();
+    setState(() {
+      _postsFuture = future;
+    });
+    await future;
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchPosts() async {
+    final posts = await _service.getLatestPosts();
+    if (!mounted) return posts;
+    setState(() {
+      _posts = posts;
+    });
+
+    for (final post in posts) {
+      final id = post['id']?.toString();
+      if (id != null && !_likedByUser.containsKey(id)) {
+        _service.hasLikedPost(id).then((liked) {
+          if (!mounted) return;
+          setState(() {
+            _likedByUser[id] = liked;
+          });
+        });
+      }
+    }
+
+    return posts;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Communauté'),
+        backgroundColor: Colors.white,
+        elevation: 0,
+      ),
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFFFFF6FE), Color(0xFFF5EEFF)],
+          ),
+        ),
+        child: SafeArea(
+          child: FutureBuilder<List<Map<String, dynamic>>>(
+            future: _postsFuture,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator());
+              }
+
+              if (snapshot.hasError) {
+                return _buildErrorState();
+              }
+
+              final posts = snapshot.data ?? [];
+              _posts = posts;
+              return Column(
+                children: [
+                  const SizedBox(height: 12),
+                  _buildShareButton(),
+                  const SizedBox(height: 12),
+                  Expanded(child: _buildPostsList()),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildShareButton() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Align(
+        alignment: Alignment.center,
+        child: ElevatedButton.icon(
+          onPressed: _openShareSheet,
+          icon: const Icon(Icons.edit_outlined),
+          label: const Text('Partager mon histoire'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.pinkAccent,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(24),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPostsList() {
+    if (_posts.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Text(
+            "Aucune histoire publiée pour le moment.",
+            style: TextStyle(color: Colors.black54),
+          ),
+        ),
+      );
+    }
+
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 700),
+        child: RefreshIndicator(
+          onRefresh: _loadPosts,
+          child: ListView.separated(
+            padding: const EdgeInsets.only(
+              left: 16,
+              right: 16,
+              top: 8,
+              bottom: 16,
+            ),
+            itemCount: _posts.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 12),
+            itemBuilder: (context, index) {
+              final post = _posts[index];
+              return TweenAnimationBuilder<double>(
+                tween: Tween(begin: 0.0, end: 1.0),
+                duration: Duration(milliseconds: 300 + index * 40),
+                builder: (context, value, child) {
+                  return Opacity(
+                    opacity: value,
+                    child: Transform.translate(
+                      offset: Offset(0, 10 * (1 - value)),
+                      child: child,
+                    ),
+                  );
+                },
+                child: _buildPostCard(post),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPostCard(Map<String, dynamic> post) {
+    final postId = post['id']?.toString() ?? '';
+    final isLiked = _likedByUser[postId] ?? false;
+    final author = (post['author_name'] as String?) ?? 'Anonyme';
+    final title = (post['title'] as String?) ?? '';
+    final content = (post['content'] as String?) ?? '';
+    final moodTag = (post['mood_tag'] as String?) ?? '';
+    final moodEmoji = kMoodEmojis[moodTag] ?? '🙂';
+    final createdAt = post['created_at']?.toString();
+    final likes = (post['likes_count'] ?? 0) as int;
+    final comments = (post['comments_count'] ?? 0) as int;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 14,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: LinearGradient(colors: _moodGradient(moodTag)),
+                  ),
+                  child: Center(
+                    child: Text(
+                      moodEmoji,
+                      style: const TextStyle(fontSize: 18),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        author,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        _formatDate(createdAt),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            if (title.isNotEmpty) ...[
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 4),
+            ],
+            Text(content, style: const TextStyle(fontSize: 14, height: 1.35)),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+              if (moodTag.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(999),
+                    color: _moodChipColor(moodTag).withOpacity(0.12),
+                  ),
+                  child: Text(
+                    moodLabel(moodTag),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: _moodChipColor(moodTag),
+                    ),
+                  ),
+                ),
+                const Spacer(),
+                Row(
+                  children: [
+                    GestureDetector(
+                      onTap: postId.isEmpty ? null : () => _onLikeTap(postId),
+                      child: Row(
+                        children: [
+                          Icon(
+                            isLiked ? Icons.favorite : Icons.favorite_border,
+                            size: 18,
+                            color: isLiked
+                                ? Colors.pinkAccent
+                                : Colors.grey.shade600,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            likes.toString(),
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: isLiked
+                                  ? Colors.pinkAccent
+                                  : Colors.grey.shade700,
+                              fontWeight: isLiked
+                                  ? FontWeight.w600
+                                  : FontWeight.normal,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    GestureDetector(
+                      onTap: () => _openCommentsSheet(post),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.chat_bubble_outline,
+                            size: 16,
+                            color: Colors.grey.shade600,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            comments.toString(),
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey.shade700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildErrorState() {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 24),
+            child: Text(
+              "Impossible de charger les histoires pour le moment.",
+              textAlign: TextAlign.center,
+            ),
+          ),
+          const SizedBox(height: 12),
+          ElevatedButton(
+            onPressed: _loadPosts,
+            child: const Text('Réessayer'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openShareSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) {
+        final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+        return Padding(
+          padding: EdgeInsets.only(
+            left: 16,
+            right: 16,
+            top: 16,
+            bottom: bottomInset + 16,
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    margin: const EdgeInsets.only(bottom: 12),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade300,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const Text(
+                  'Partager mon histoire',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _titleController,
+                  decoration: const InputDecoration(
+                    labelText: 'Titre',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _contentController,
+                  maxLines: 4,
+                  decoration: const InputDecoration(
+                    labelText: 'Votre histoire',
+                    alignLabelWithHint: true,
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    const Text('Humeur :'),
+                    const SizedBox(width: 12),
+                    DropdownButton<String>(
+                      value: _selectedMood,
+                      items: kMoodEmojis.keys
+                          .map(
+                            (mood) => DropdownMenuItem<String>(
+                              value: mood,
+                              child: Text(moodLabel(mood)),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setState(() {
+                          _selectedMood = value;
+                        });
+                      },
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Publier en anonyme'),
+                  value: _isAnonymous,
+                  onChanged: (value) {
+                    setState(() {
+                      _isAnonymous = value;
+                    });
+                  },
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: _isSubmitting ? null : _submitPost,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.pinkAccent,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                    ),
+                    child: _isSubmitting
+                        ? const SizedBox(
+                            height: 20,
+                            width: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Text('Publier'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _submitPost() async {
+    final title = _titleController.text.trim();
+    final content = _contentController.text.trim();
+
+    if (title.isEmpty || content.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Merci de remplir le titre et le contenu.'),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _isSubmitting = true;
+    });
+
+    final success = await _service.createPost(
+      title: title,
+      content: content,
+      moodTag: _selectedMood,
+      authorName: _isAnonymous ? 'Anonyme' : null,
+    );
+
+    setState(() {
+      _isSubmitting = false;
+    });
+
+    if (!mounted) return;
+
+    if (success) {
+      _titleController.clear();
+      _contentController.clear();
+
+      Navigator.of(context).pop();
+
+      await _loadPosts();
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Votre histoire a été publiée.')),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Erreur lors de la publication.')),
+      );
+    }
+  }
+
+  String _formatDate(String? isoString) {
+    if (isoString == null) return '';
+    try {
+      final dt = DateTime.parse(isoString).toLocal();
+      return '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year}';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  List<Color> _moodGradient(String mood) {
+    switch (mood.toLowerCase()) {
+      case 'joyeux':
+        return [const Color(0xFFFFF1C1), const Color(0xFFFFD6A5)];
+      case 'serein':
+        return [const Color(0xFFC7F9CC), const Color(0xFFA0E7E5)];
+      case 'triste':
+        return [const Color(0xFFE0BBFF), const Color(0xFFBDB2FF)];
+      case 'stressé':
+        return [const Color(0xFFFFADAD), const Color(0xFFFF9AA2)];
+      case 'reconnaissant':
+        return [const Color(0xFFCDEAC0), const Color(0xFFFDFFB6)];
+      default:
+        return [const Color(0xFFEDE7F6), const Color(0xFFF3E5F5)];
+    }
+  }
+
+  Color _moodChipColor(String mood) {
+    switch (mood.toLowerCase()) {
+      case 'joyeux':
+        return const Color(0xFFFF9F1C);
+      case 'serein':
+        return const Color(0xFF2EC4B6);
+      case 'triste':
+        return const Color(0xFF5E60CE);
+      case 'stressé':
+        return const Color(0xFFFF595E);
+      case 'reconnaissant':
+        return const Color(0xFF67B26F);
+      default:
+        return Colors.grey.shade600;
+    }
+  }
+
+  Future<void> _onLikeTap(String postId) async {
+    final result = await _service.toggleLike(postId);
+    if (result == null || !mounted) return;
+
+    setState(() {
+      _likedByUser[postId] = result;
+
+      final index = _posts.indexWhere((p) => p['id']?.toString() == postId);
+      if (index != -1) {
+        final current = (_posts[index]['likes_count'] ?? 0) as int;
+        final next = result
+            ? current + 1
+            : (current - 1).clamp(0, 999999) as int;
+        _posts[index]['likes_count'] = next;
+      }
+    });
+  }
+}
+
+class _CommentsSheet extends StatefulWidget {
+  final Map<String, dynamic> post;
+  final List<Map<String, dynamic>> initialComments;
+  final void Function(Map<String, dynamic> newComment) onAddComment;
+  final void Function(Map<String, dynamic> deletedComment)? onDeleteComment;
+
+  const _CommentsSheet({
+    Key? key,
+    required this.post,
+    required this.initialComments,
+    required this.onAddComment,
+    this.onDeleteComment,
+  }) : super(key: key);
+
+  @override
+  State<_CommentsSheet> createState() => _CommentsSheetState();
+}
+
+class _CommentsSheetState extends State<_CommentsSheet> {
+  late List<Map<String, dynamic>> _comments;
+  final TextEditingController _commentController = TextEditingController();
+  bool _isSending = false;
+  final CommunityService _communityService = const CommunityService();
+
+  @override
+  void initState() {
+    super.initState();
+    _comments = List<Map<String, dynamic>>.from(widget.initialComments);
+  }
+
+  Future<void> _submitComment() async {
+    final rawText = _commentController.text.trim();
+    if (rawText.isEmpty || _isSending) return;
+
+    setState(() => _isSending = true);
+
+    final postId = widget.post['id']?.toString();
+    if (postId == null) {
+      if (mounted) {
+        setState(() => _isSending = false);
+      }
+      return;
+    }
+
+    try {
+      final newComment = await _communityService.addComment(
+        postId: postId,
+        content: rawText,
+      );
+
+      if (!mounted) return;
+
+      if (newComment != null) {
+        setState(() {
+          _comments.insert(0, newComment);
+        });
+        widget.onAddComment(newComment);
+        _commentController.clear();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Impossible d'envoyer le commentaire."),
+          ),
+        );
+      }
+    } catch (error, stackTrace) {
+      debugPrint('Error submitting comment: $error\n$stackTrace');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Impossible d'envoyer le commentaire."),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isSending = false);
+      }
+    }
+  }
+
+  Future<void> _openEditCommentSheet(Map<String, dynamic> comment) async {
+    final controller = TextEditingController(
+      text: (comment['content'] as String?) ?? '',
+    );
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(context).viewInsets.bottom,
+          ),
+          child: Container(
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+            ),
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  'Modifier le commentaire',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: controller,
+                  maxLines: null,
+                  decoration: const InputDecoration(
+                    hintText: 'Votre commentaire',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  height: 46,
+                  child: ElevatedButton(
+                    onPressed: () async {
+                      final newContent = controller.text.trim();
+                      if (newContent.isEmpty) return;
+
+                      final commentId = comment['id']?.toString();
+                      if (commentId == null || commentId.isEmpty) return;
+
+                      try {
+                        final updatedComment =
+                            await _communityService.updateComment(
+                          commentId: commentId,
+                          newContent: newContent,
+                        );
+
+                        if (!mounted) return;
+                        setState(() {
+                          final index = _comments
+                              .indexWhere((c) => c['id'] == updatedComment['id']);
+                          if (index != -1) {
+                            _comments[index] = updatedComment;
+                          }
+                        });
+
+                        Navigator.of(context).pop();
+                      } catch (error, stackTrace) {
+                        debugPrint('Error updating comment: $error\n$stackTrace');
+                      }
+                    },
+                    child: const Text('Enregistrer'),
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
+            ),
+          ),
+        );
+      },
+    ).whenComplete(() {
+      controller.dispose();
+    });
+  }
+
+  Future<void> _confirmDeleteComment(Map<String, dynamic> comment) async {
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Supprimer le commentaire ?'),
+          content: const Text('Cette action est définitive.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Annuler'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text(
+                'Supprimer',
+                style: TextStyle(color: Colors.red),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldDelete == true) {
+      await _deleteComment(comment);
+    }
+  }
+
+  Future<void> _deleteComment(Map<String, dynamic> comment) async {
+    final supabaseClient = Supabase.instance.client;
+    final commentId = comment['id'];
+    if (commentId == null) return;
+
+    final postId =
+        comment['post_id']?.toString() ?? widget.post['id']?.toString();
+    if (postId == null) return;
+
+    try {
+      await supabaseClient.from('post_comments').delete().eq('id', commentId);
+
+      final countRow = await supabaseClient
+          .from('community_posts')
+          .select('comments_count')
+          .eq('id', postId)
+          .maybeSingle();
+
+      final currentCount = (countRow?['comments_count'] ?? 0) as int;
+      final nextCount = ((currentCount - 1).clamp(0, 1 << 31)).toInt();
+
+      await supabaseClient
+          .from('community_posts')
+          .update({'comments_count': nextCount})
+          .eq('id', postId);
+
+      if (!mounted) return;
+      setState(() {
+        _comments.removeWhere((c) => c['id'] == commentId);
+      });
+
+      widget.onDeleteComment?.call(comment);
+    } catch (error, stackTrace) {
+      debugPrint('Erreur suppression commentaire: $error\n$stackTrace');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Impossible de supprimer le commentaire.'),
+        ),
+      );
+    }
+  }
+
+  bool _canEdit(Map<String, dynamic> comment) {
+    final currentUserId = Supabase.instance.client.auth.currentUser?.id;
+    if (currentUserId == null) return false;
+    final commentUserId = comment['user_id'];
+    if (commentUserId == null) return false;
+    return commentUserId.toString() == currentUserId;
+  }
+
+  Widget _buildCommentItem(Map<String, dynamic> comment) {
+    final author = (comment['author_name'] as String?) ?? 'Anonyme';
+    final content = (comment['content'] as String?) ?? '';
+    final createdAt = comment['created_at']?.toString();
+    final updatedAt = comment['updated_at'];
+    final isOwner = _canEdit(comment);
+
+    return GestureDetector(
+      onLongPress: isOwner ? () => _openEditCommentSheet(comment) : null,
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(vertical: 6),
+        leading: Container(
+          width: 32,
+          height: 32,
+          decoration: const BoxDecoration(
+            shape: BoxShape.circle,
+            color: Color(0xFFFFE4F2),
+          ),
+          child: const Icon(Icons.person, size: 18, color: Colors.pinkAccent),
+        ),
+        title: Row(
+          children: [
+            Text(
+              author,
+              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+            ),
+            const SizedBox(width: 6),
+            if (createdAt != null)
+              Text(
+                _formatDate(createdAt),
+                style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+              ),
+          ],
+        ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(content, style: const TextStyle(fontSize: 13)),
+            if (updatedAt != null)
+              const Text(
+                'Modifié',
+                style: TextStyle(fontSize: 11, color: Colors.grey),
+              ),
+          ],
+        ),
+        trailing: isOwner
+            ? PopupMenuButton<String>(
+                onSelected: (value) {
+                  if (value == 'edit') {
+                    _openEditCommentSheet(comment);
+                  } else if (value == 'delete') {
+                    _confirmDeleteComment(comment);
+                  }
+                },
+                itemBuilder: (context) => const [
+                  PopupMenuItem(value: 'edit', child: Text('Modifier')),
+                  PopupMenuItem(value: 'delete', child: Text('Supprimer')),
+                ],
+              )
+            : null,
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _commentController.dispose();
+    super.dispose();
+  }
+
+  String _formatDate(String isoString) {
+    final date = DateTime.tryParse(isoString);
+    if (date == null) return '';
+    final day = date.day.toString().padLeft(2, '0');
+    final month = date.month.toString().padLeft(2, '0');
+    final year = date.year.toString();
+    return '$day/$month/$year';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final viewInsets = MediaQuery.of(context).viewInsets;
+    final postTitle = (widget.post['title'] as String?) ?? '';
+
+    return Padding(
+      padding: EdgeInsets.only(top: 40, bottom: viewInsets.bottom),
+      child: Container(
+        decoration: const BoxDecoration(
+          color: Color(0xFFFDF7FF),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 8),
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    postTitle.isEmpty ? 'Commentaires' : postTitle,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: _comments.isEmpty
+                    ? const Center(
+                        child: Text(
+                          "Aucun commentaire pour le moment.\nSoyez le premier à partager votre expérience ✨",
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 13, color: Colors.black54),
+                        ),
+                      )
+                    : ListView.builder(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
+                        itemCount: _comments.length,
+                        itemBuilder: (context, index) {
+                          return _buildCommentItem(_comments[index]);
+                        },
+                      ),
+              ),
+              const Divider(height: 1),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _commentController,
+                        minLines: 1,
+                        maxLines: 4,
+                        decoration: const InputDecoration(
+                          hintText: 'Écrire un commentaire...',
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.all(
+                              Radius.circular(999),
+                            ),
+                            borderSide: BorderSide.none,
+                          ),
+                          filled: true,
+                          fillColor: Colors.white,
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 10,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      onPressed: _isSending ? null : _submitComment,
+                      icon: _isSending
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.send_rounded),
+                      color: Colors.pinkAccent,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
