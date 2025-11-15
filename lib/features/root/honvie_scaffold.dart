@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:honvie/features/home/presentation/home_page.dart';
 import 'package:honvie/features/map/presentation/map_page.dart';
 import 'package:honvie/features/inspiration/presentation/inspiration_page.dart';
+import 'package:honvie/features/community/presentation/explore_page.dart';
 import 'package:honvie/features/community/presentation/community_page.dart';
 import 'package:honvie/features/profile/presentation/profile_page.dart';
 
@@ -25,6 +26,7 @@ class _HonvieScaffoldState extends State<HonvieScaffold> {
     const HomePage(),
     const MapPage(),
     InspirationPage(key: _inspirationKey),
+    const ExplorePage(),
     const CommunityPage(),
     ProfilePage(key: _profileKey),
   ];
@@ -83,6 +85,10 @@ class _HonvieScaffoldState extends State<HonvieScaffold> {
                 label: 'Inspiration',
               ),
               BottomNavigationBarItem(
+                icon: Icon(Icons.explore_outlined),
+                label: 'Explorer',
+              ),
+              BottomNavigationBarItem(
                 icon: Icon(Icons.people_outline),
                 label: 'Comm.',
               ),
@@ -104,7 +110,7 @@ class _HonvieScaffoldState extends State<HonvieScaffold> {
 
     if (index == 2) {
       _inspirationKey.currentState?.runEntranceAnimation();
-    } else if (index == 4) {
+    } else if (index == 5) {
       _profileKey.currentState?.runEntranceAnimation();
     }
   }

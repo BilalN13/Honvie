@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:honvie/features/community/data/community_service.dart';
+import 'package:honvie/features/community/presentation/user_profile_page.dart';
 
 const Map<String, String> kMoodEmojis = {
   'Joyeux': '😀',
@@ -25,7 +26,8 @@ class CommunityPage extends StatefulWidget {
 
 class _CommunityPageState extends State<CommunityPage> {
   final CommunityService _service = const CommunityService();
-  late Future<List<Map<String, dynamic>>> _postsFuture;
+  final ScrollController _scrollController = ScrollController();
+  late final RealtimeChannel _postsChannel;
   List<Map<String, dynamic>> _posts = [];
   final Map<String, bool> _likedByUser = {};
   final Map<String, List<Map<String, dynamic>>> _commentsByPost = {};
@@ -35,6 +37,11 @@ class _CommunityPageState extends State<CommunityPage> {
   String _selectedMood = 'Joyeux';
   bool _isAnonymous = true;
   bool _isSubmitting = false;
+  bool _isInitialLoading = false;
+  bool _isLoadingMore = false;
+  bool _hasMore = true;
+  final int _pageSize = 10;
+  int _currentOffset = 0;
 
   Future<void> _openCommentsSheet(Map<String, dynamic> post) async {
     final postId = post['id']?.toString();
@@ -109,31 +116,77 @@ class _CommunityPageState extends State<CommunityPage> {
   @override
   void initState() {
     super.initState();
-    _postsFuture = _fetchPosts();
+    _isInitialLoading = true;
+    _loadInitialPosts();
+    _postsChannel = Supabase.instance.client.channel('public:community_posts');
+    _setupRealtime();
+    _scrollController.addListener(_onScroll);
   }
 
   @override
   void dispose() {
+    _postsChannel.unsubscribe();
+    _scrollController.dispose();
     _titleController.dispose();
     _contentController.dispose();
     super.dispose();
   }
 
   Future<void> _loadPosts() async {
-    final future = _fetchPosts();
-    setState(() {
-      _postsFuture = future;
-    });
-    await future;
+    await _loadInitialPosts();
   }
 
-  Future<List<Map<String, dynamic>>> _fetchPosts() async {
-    final posts = await _service.getLatestPosts();
-    if (!mounted) return posts;
+  Future<void> _loadInitialPosts() async {
     setState(() {
-      _posts = posts;
+      _isInitialLoading = true;
+      _posts = [];
+      _currentOffset = 0;
+      _hasMore = true;
+      _isLoadingMore = false;
     });
 
+    final newPosts = await _service.getPostsPage(
+      limit: _pageSize,
+      offset: _currentOffset,
+    );
+
+    if (!mounted) return;
+
+    setState(() {
+      _posts = newPosts;
+      _isInitialLoading = false;
+      _currentOffset = _posts.length;
+      _hasMore = newPosts.length == _pageSize;
+    });
+
+    _prefetchLikesForPosts(newPosts);
+  }
+
+  Future<void> _loadMorePosts() async {
+    if (_isLoadingMore || !_hasMore) return;
+
+    setState(() {
+      _isLoadingMore = true;
+    });
+
+    final newPosts = await _service.getPostsPage(
+      limit: _pageSize,
+      offset: _currentOffset,
+    );
+
+    if (!mounted) return;
+
+    setState(() {
+      _posts.addAll(newPosts);
+      _currentOffset = _posts.length;
+      _isLoadingMore = false;
+      _hasMore = newPosts.length == _pageSize;
+    });
+
+    _prefetchLikesForPosts(newPosts);
+  }
+
+  void _prefetchLikesForPosts(List<Map<String, dynamic>> posts) {
     for (final post in posts) {
       final id = post['id']?.toString();
       if (id != null && !_likedByUser.containsKey(id)) {
@@ -145,8 +198,97 @@ class _CommunityPageState extends State<CommunityPage> {
         });
       }
     }
+  }
 
-    return posts;
+  void _onScroll() {
+    if (!_scrollController.hasClients || _isLoadingMore || !_hasMore) return;
+
+    const threshold = 200.0;
+    if (_scrollController.position.pixels >
+        _scrollController.position.maxScrollExtent - threshold) {
+      _loadMorePosts();
+    }
+  }
+
+  void _openUserProfile(String userId, String authorName) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => UserProfilePage(
+          userId: userId,
+          authorName: authorName,
+        ),
+      ),
+    );
+  }
+
+  void _setupRealtime() {
+    _postsChannel
+      ..onPostgresChanges(
+        event: PostgresChangeEvent.insert,
+        schema: 'public',
+        table: 'community_posts',
+        callback: _handlePostInserted,
+      )
+      ..onPostgresChanges(
+        event: PostgresChangeEvent.update,
+        schema: 'public',
+        table: 'community_posts',
+        callback: _handlePostUpdated,
+      )
+      ..onPostgresChanges(
+        event: PostgresChangeEvent.delete,
+        schema: 'public',
+        table: 'community_posts',
+        callback: _handlePostDeleted,
+      )
+      ..subscribe();
+  }
+
+  void _handlePostInserted(PostgresChangePayload payload) {
+    final newRecord = Map<String, dynamic>.from(payload.newRecord);
+
+    final id = newRecord['id']?.toString();
+    if (id == null) return;
+
+    final alreadyExists =
+        _posts.any((post) => post['id']?.toString() == id);
+    if (alreadyExists) return;
+
+    setState(() {
+      _posts.insert(0, Map<String, dynamic>.from(newRecord));
+      _currentOffset = _posts.length;
+    });
+  }
+
+  void _handlePostUpdated(PostgresChangePayload payload) {
+    final newRecord = Map<String, dynamic>.from(payload.newRecord);
+
+    final id = newRecord['id']?.toString();
+    if (id == null) return;
+
+    final index =
+        _posts.indexWhere((post) => post['id']?.toString() == id);
+    if (index == -1) return;
+
+    setState(() {
+      _posts[index] = Map<String, dynamic>.from(newRecord);
+    });
+  }
+
+  void _handlePostDeleted(PostgresChangePayload payload) {
+    final oldRecord = Map<String, dynamic>.from(payload.oldRecord);
+
+    final id = oldRecord['id']?.toString();
+    if (id == null) return;
+
+    final index =
+        _posts.indexWhere((post) => post['id']?.toString() == id);
+    if (index == -1) return;
+
+    setState(() {
+      _posts.removeAt(index);
+      _currentOffset = _posts.length;
+    });
   }
 
   @override
@@ -166,29 +308,16 @@ class _CommunityPageState extends State<CommunityPage> {
           ),
         ),
         child: SafeArea(
-          child: FutureBuilder<List<Map<String, dynamic>>>(
-            future: _postsFuture,
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const Center(child: CircularProgressIndicator());
-              }
-
-              if (snapshot.hasError) {
-                return _buildErrorState();
-              }
-
-              final posts = snapshot.data ?? [];
-              _posts = posts;
-              return Column(
-                children: [
-                  const SizedBox(height: 12),
-                  _buildShareButton(),
-                  const SizedBox(height: 12),
-                  Expanded(child: _buildPostsList()),
-                ],
-              );
-            },
-          ),
+          child: _isInitialLoading && _posts.isEmpty
+              ? const Center(child: CircularProgressIndicator())
+              : Column(
+                  children: [
+                    const SizedBox(height: 12),
+                    _buildShareButton(),
+                    const SizedBox(height: 12),
+                    Expanded(child: _buildPostsList()),
+                  ],
+                ),
         ),
       ),
     );
@@ -217,50 +346,73 @@ class _CommunityPageState extends State<CommunityPage> {
   }
 
   Widget _buildPostsList() {
-    if (_posts.isEmpty) {
-      return const Center(
-        child: Padding(
-          padding: EdgeInsets.all(24),
-          child: Text(
-            "Aucune histoire publiée pour le moment.",
-            style: TextStyle(color: Colors.black54),
-          ),
-        ),
-      );
-    }
-
     return Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 700),
         child: RefreshIndicator(
-          onRefresh: _loadPosts,
-          child: ListView.separated(
-            padding: const EdgeInsets.only(
-              left: 16,
-              right: 16,
-              top: 8,
-              bottom: 16,
-            ),
-            itemCount: _posts.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 12),
-            itemBuilder: (context, index) {
-              final post = _posts[index];
-              return TweenAnimationBuilder<double>(
-                tween: Tween(begin: 0.0, end: 1.0),
-                duration: Duration(milliseconds: 300 + index * 40),
-                builder: (context, value, child) {
-                  return Opacity(
-                    opacity: value,
-                    child: Transform.translate(
-                      offset: Offset(0, 10 * (1 - value)),
-                      child: child,
-                    ),
-                  );
-                },
-                child: _buildPostCard(post),
-              );
-            },
-          ),
+          onRefresh: _loadInitialPosts,
+          child: _posts.isEmpty
+              ? LayoutBuilder(
+                  builder: (context, constraints) {
+                    return SingleChildScrollView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      child: SizedBox(
+                        height: constraints.maxHeight,
+                        child: const Center(
+                          child: Padding(
+                            padding: EdgeInsets.all(24),
+                            child: Text(
+                              "Aucune histoire publiée pour le moment.",
+                              style: TextStyle(color: Colors.black54),
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                )
+              : ListView.separated(
+                  controller: _scrollController,
+                  padding: const EdgeInsets.only(
+                    left: 16,
+                    right: 16,
+                    top: 8,
+                    bottom: 16,
+                  ),
+                  itemCount: _posts.length + 1,
+                  separatorBuilder: (_, __) => const SizedBox(height: 12),
+                  itemBuilder: (context, index) {
+                    if (index == _posts.length) {
+                      if (_isLoadingMore) {
+                        return const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 16.0),
+                          child: Center(child: CircularProgressIndicator()),
+                        );
+                      }
+                      if (!_hasMore) {
+                        return const SizedBox.shrink();
+                      }
+                      return const SizedBox.shrink();
+                    }
+
+                    final post = _posts[index];
+                    return TweenAnimationBuilder<double>(
+                      tween: Tween(begin: 0.0, end: 1.0),
+                      duration: Duration(milliseconds: 300 + index * 40),
+                      builder: (context, value, child) {
+                        final curvedValue = Curves.easeOut.transform(value);
+                        return Opacity(
+                          opacity: curvedValue,
+                          child: Transform.translate(
+                            offset: Offset(0, 10 * (1 - curvedValue)),
+                            child: child,
+                          ),
+                        );
+                      },
+                      child: _buildPostCard(post),
+                    );
+                  },
+                ),
         ),
       ),
     );
@@ -277,6 +429,7 @@ class _CommunityPageState extends State<CommunityPage> {
     final createdAt = post['created_at']?.toString();
     final likes = (post['likes_count'] ?? 0) as int;
     final comments = (post['comments_count'] ?? 0) as int;
+    final authorId = post['user_id']?.toString();
 
     return Container(
       decoration: BoxDecoration(
@@ -298,17 +451,22 @@ class _CommunityPageState extends State<CommunityPage> {
             Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: LinearGradient(colors: _moodGradient(moodTag)),
-                  ),
-                  child: Center(
-                    child: Text(
-                      moodEmoji,
-                      style: const TextStyle(fontSize: 18),
+                GestureDetector(
+                  onTap: authorId == null
+                      ? null
+                      : () => _openUserProfile(authorId, author),
+                  child: Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(colors: _moodGradient(moodTag)),
+                    ),
+                    child: Center(
+                      child: Text(
+                        moodEmoji,
+                        style: const TextStyle(fontSize: 18),
+                      ),
                     ),
                   ),
                 ),
@@ -317,11 +475,16 @@ class _CommunityPageState extends State<CommunityPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        author,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 14,
+                      GestureDetector(
+                        onTap: authorId == null
+                            ? null
+                            : () => _openUserProfile(authorId, author),
+                        child: Text(
+                          author,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
                         ),
                       ),
                       const SizedBox(height: 2),
@@ -352,24 +515,24 @@ class _CommunityPageState extends State<CommunityPage> {
             const SizedBox(height: 10),
             Row(
               children: [
-              if (moodTag.isNotEmpty)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(999),
-                    color: _moodChipColor(moodTag).withOpacity(0.12),
-                  ),
-                  child: Text(
-                    moodLabel(moodTag),
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: _moodChipColor(moodTag),
+                if (moodTag.isNotEmpty)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(999),
+                      color: _moodChipColor(moodTag).withOpacity(0.12),
+                    ),
+                    child: Text(
+                      moodLabel(moodTag),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: _moodChipColor(moodTag),
+                      ),
                     ),
                   ),
-                ),
                 const Spacer(),
                 Row(
                   children: [
@@ -377,24 +540,54 @@ class _CommunityPageState extends State<CommunityPage> {
                       onTap: postId.isEmpty ? null : () => _onLikeTap(postId),
                       child: Row(
                         children: [
-                          Icon(
-                            isLiked ? Icons.favorite : Icons.favorite_border,
-                            size: 18,
-                            color: isLiked
-                                ? Colors.pinkAccent
-                                : Colors.grey.shade600,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            likes.toString(),
-                            style: TextStyle(
-                              fontSize: 12,
+                          AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 200),
+                            transitionBuilder: (child, animation) {
+                              return ScaleTransition(
+                                scale: Tween(begin: 0.9, end: 1.0).animate(
+                                  CurvedAnimation(
+                                    parent: animation,
+                                    curve: Curves.easeOutBack,
+                                  ),
+                                ),
+                                child: child,
+                              );
+                            },
+                            child: Icon(
+                              isLiked ? Icons.favorite : Icons.favorite_border,
+                              key: ValueKey<bool>(isLiked),
+                              size: 18,
                               color: isLiked
                                   ? Colors.pinkAccent
-                                  : Colors.grey.shade700,
-                              fontWeight: isLiked
-                                  ? FontWeight.w600
-                                  : FontWeight.normal,
+                                  : Colors.grey.shade600,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 200),
+                            transitionBuilder: (child, animation) {
+                              return ScaleTransition(
+                                scale: Tween(begin: 0.9, end: 1.0).animate(
+                                  CurvedAnimation(
+                                    parent: animation,
+                                    curve: Curves.easeOutBack,
+                                  ),
+                                ),
+                                child: child,
+                              );
+                            },
+                            child: Text(
+                              likes.toString(),
+                              key: ValueKey<int>(likes),
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: isLiked
+                                    ? Colors.pinkAccent
+                                    : Colors.grey.shade700,
+                                fontWeight: isLiked
+                                    ? FontWeight.w600
+                                    : FontWeight.normal,
+                              ),
                             ),
                           ),
                         ],
@@ -431,27 +624,6 @@ class _CommunityPageState extends State<CommunityPage> {
     );
   }
 
-  Widget _buildErrorState() {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 24),
-            child: Text(
-              "Impossible de charger les histoires pour le moment.",
-              textAlign: TextAlign.center,
-            ),
-          ),
-          const SizedBox(height: 12),
-          ElevatedButton(
-            onPressed: _loadPosts,
-            child: const Text('Réessayer'),
-          ),
-        ],
-      ),
-    );
-  }
 
   void _openShareSheet() {
     showModalBottomSheet(
@@ -682,7 +854,7 @@ class _CommunityPageState extends State<CommunityPage> {
         final current = (_posts[index]['likes_count'] ?? 0) as int;
         final next = result
             ? current + 1
-            : (current - 1).clamp(0, 999999) as int;
+            : ((current - 1).clamp(0, 999999)).toInt();
         _posts[index]['likes_count'] = next;
       }
     });
@@ -749,18 +921,14 @@ class _CommentsSheetState extends State<_CommentsSheet> {
         _commentController.clear();
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Impossible d'envoyer le commentaire."),
-          ),
+          const SnackBar(content: Text("Impossible d'envoyer le commentaire.")),
         );
       }
     } catch (error, stackTrace) {
       debugPrint('Error submitting comment: $error\n$stackTrace');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Impossible d'envoyer le commentaire."),
-          ),
+          const SnackBar(content: Text("Impossible d'envoyer le commentaire.")),
         );
       }
     } finally {
@@ -819,16 +987,17 @@ class _CommentsSheetState extends State<_CommentsSheet> {
                       if (commentId == null || commentId.isEmpty) return;
 
                       try {
-                        final updatedComment =
-                            await _communityService.updateComment(
-                          commentId: commentId,
-                          newContent: newContent,
-                        );
+                        final updatedComment = await _communityService
+                            .updateComment(
+                              commentId: commentId,
+                              newContent: newContent,
+                            );
 
                         if (!mounted) return;
                         setState(() {
-                          final index = _comments
-                              .indexWhere((c) => c['id'] == updatedComment['id']);
+                          final index = _comments.indexWhere(
+                            (c) => c['id'] == updatedComment['id'],
+                          );
                           if (index != -1) {
                             _comments[index] = updatedComment;
                           }
@@ -836,7 +1005,9 @@ class _CommentsSheetState extends State<_CommentsSheet> {
 
                         Navigator.of(context).pop();
                       } catch (error, stackTrace) {
-                        debugPrint('Error updating comment: $error\n$stackTrace');
+                        debugPrint(
+                          'Error updating comment: $error\n$stackTrace',
+                        );
                       }
                     },
                     child: const Text('Enregistrer'),

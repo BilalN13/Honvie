@@ -20,6 +20,55 @@ class CommunityService {
     }
   }
 
+  Future<List<Map<String, dynamic>>> getPostsPage({
+    required int limit,
+    required int offset,
+  }) async {
+    try {
+      final response = await supabase
+          .from('community_posts')
+          .select('*')
+          .order('created_at', ascending: false)
+          .range(offset, offset + limit - 1);
+
+      final data = response as List<dynamic>;
+      return data.cast<Map<String, dynamic>>();
+    } catch (error, stackTrace) {
+      // ignore: avoid_print
+      print('Error fetching paginated community posts: $error\n$stackTrace');
+      return [];
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> getPosts({
+    int limit = 20,
+    int offset = 0,
+    String? moodTag,
+    String? userId,
+  }) async {
+    try {
+      dynamic query = supabase
+          .from('community_posts')
+          .select('*')
+          .order('created_at', ascending: false);
+
+      if (moodTag != null && moodTag.isNotEmpty) {
+        query = query.eq('mood_tag', moodTag);
+      }
+      if (userId != null && userId.isNotEmpty) {
+        query = query.eq('user_id', userId);
+      }
+
+      final response = await query.range(offset, offset + limit - 1);
+      final data = response as List<dynamic>;
+      return data.cast<Map<String, dynamic>>();
+    } catch (error, stackTrace) {
+      // ignore: avoid_print
+      print('Error fetching filtered posts: $error\n$stackTrace');
+      return [];
+    }
+  }
+
   Future<bool> createPost({
     required String title,
     required String content,
@@ -164,7 +213,7 @@ class CommunityService {
           .update({'comments_count': currentCount})
           .eq('id', postId);
 
-      return inserted as Map<String, dynamic>;
+      return Map<String, dynamic>.from(inserted);
     } catch (error, stackTrace) {
       // ignore: avoid_print
       print('Error adding comment: $error\n$stackTrace');
