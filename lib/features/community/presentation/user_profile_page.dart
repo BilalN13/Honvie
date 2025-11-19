@@ -50,10 +50,11 @@ class _UserProfilePageState extends State<UserProfilePage> {
       _isLoadingMore = false;
     });
 
-    final newPosts = await _service.getPosts(
+    final newPosts = await _service.getUserPostsPage(
+      userId: widget.userId,
       limit: _pageSize,
       offset: _offset,
-      userId: widget.userId,
+      moodFilter: null,
     );
 
     if (!mounted) return;
@@ -72,10 +73,11 @@ class _UserProfilePageState extends State<UserProfilePage> {
       _isLoadingMore = true;
     });
 
-    final newPosts = await _service.getPosts(
+    final newPosts = await _service.getUserPostsPage(
+      userId: widget.userId,
       limit: _pageSize,
       offset: _offset,
-      userId: widget.userId,
+      moodFilter: null,
     );
 
     if (!mounted) return;
@@ -201,7 +203,7 @@ class CommunityPageStateCard {
     final likes = (post['likes_count'] ?? 0) as int;
     final comments = (post['comments_count'] ?? 0) as int;
 
-    Color _moodChipColor(String mood) {
+    Color moodChipColor(String mood) {
       switch (mood.toLowerCase()) {
         case 'joyeux':
           return const Color(0xFFFF9F1C);
@@ -219,7 +221,7 @@ class CommunityPageStateCard {
       }
     }
 
-    List<Color> _moodGradient(String mood) {
+    List<Color> moodGradient(String mood) {
       switch (mood.toLowerCase()) {
         case 'joyeux':
           return [const Color(0xFFFFF1C1), const Color(0xFFFFD6A5)];
@@ -237,7 +239,7 @@ class CommunityPageStateCard {
       }
     }
 
-    String _formatDate(String? isoString) {
+    String formatDate(String? isoString) {
       if (isoString == null) return '';
       try {
         final dt = DateTime.parse(isoString).toLocal();
@@ -253,7 +255,7 @@ class CommunityPageStateCard {
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.03),
+            color: Colors.black.withValues(alpha: 0.03),
             blurRadius: 14,
             offset: const Offset(0, 6),
           ),
@@ -272,7 +274,7 @@ class CommunityPageStateCard {
                   height: 36,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    gradient: LinearGradient(colors: _moodGradient(moodTag)),
+                     gradient: LinearGradient(colors: moodGradient(moodTag)),
                   ),
                   child: Center(
                     child: Text(
@@ -295,7 +297,7 @@ class CommunityPageStateCard {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        _formatDate(createdAt),
+                         formatDate(createdAt),
                         style: TextStyle(
                           fontSize: 12,
                           color: Colors.grey.shade600,
@@ -329,13 +331,13 @@ class CommunityPageStateCard {
                     ),
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(999),
-                      color: _moodChipColor(moodTag).withOpacity(0.12),
+                      color: moodChipColor(moodTag).withValues(alpha: 0.12),
                     ),
                     child: Text(
                       moodLabel(moodTag),
                       style: TextStyle(
                         fontSize: 12,
-                        color: _moodChipColor(moodTag),
+                         color: moodChipColor(moodTag),
                       ),
                     ),
                   ),

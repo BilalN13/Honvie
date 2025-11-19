@@ -1,227 +1,305 @@
+import 'package:flutter/foundation.dart';
 import 'package:honvie/core/supabase_client.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class CommunityService {
   const CommunityService();
 
-  Future<List<Map<String, dynamic>>> getLatestPosts() async {
-    try {
-      final response = await supabase
-          .from('community_posts')
-          .select('*')
-          .order('created_at', ascending: false)
-          .limit(50);
+  // ---------------------------------------------------------------------------
+  // UPLOAD D'IMAGE POUR LES POSTS
+  // ---------------------------------------------------------------------------
 
-      final data = response as List<dynamic>;
-      return data.cast<Map<String, dynamic>>();
-    } catch (error, stackTrace) {
-      // ignore: avoid_print
-      print('Error fetching community posts: $error\n$stackTrace');
-      return [];
-    }
-  }
-
-  Future<List<Map<String, dynamic>>> getPostsPage({
-    required int limit,
-    required int offset,
+  Future<String?> uploadPostImage({
+    required Uint8List bytes,
+    required String path,
+    String contentType = 'image/jpeg',
   }) async {
     try {
-      final response = await supabase
-          .from('community_posts')
-          .select('*')
-          .order('created_at', ascending: false)
-          .range(offset, offset + limit - 1);
+      const bucket = 'post-images';
+      final storagePath = 'posts/$path';
 
-      final data = response as List<dynamic>;
-      return data.cast<Map<String, dynamic>>();
-    } catch (error, stackTrace) {
-      // ignore: avoid_print
-      print('Error fetching paginated community posts: $error\n$stackTrace');
-      return [];
+      await supabase.storage.from(bucket).uploadBinary(
+            storagePath,
+            bytes,
+            fileOptions: FileOptions(
+              upsert: true,
+              contentType: contentType,
+            ),
+          );
+
+      return supabase.storage.from(bucket).getPublicUrl(storagePath);
+    } catch (e) {
+      debugPrint("Erreur uploadPostImage : $e");
+      return null;
     }
   }
 
-  Future<List<Map<String, dynamic>>> getPosts({
-    int limit = 20,
-    int offset = 0,
-    String? moodTag,
-    String? userId,
-  }) async {
-    try {
-      dynamic query = supabase
-          .from('community_posts')
-          .select('*')
-          .order('created_at', ascending: false);
-
-      if (moodTag != null && moodTag.isNotEmpty) {
-        query = query.eq('mood_tag', moodTag);
-      }
-      if (userId != null && userId.isNotEmpty) {
-        query = query.eq('user_id', userId);
-      }
-
-      final response = await query.range(offset, offset + limit - 1);
-      final data = response as List<dynamic>;
-      return data.cast<Map<String, dynamic>>();
-    } catch (error, stackTrace) {
-      // ignore: avoid_print
-      print('Error fetching filtered posts: $error\n$stackTrace');
-      return [];
-    }
-  }
+  // ---------------------------------------------------------------------------
+  // CREER UN POST
+  // ---------------------------------------------------------------------------
 
   Future<bool> createPost({
     required String title,
     required String content,
     required String moodTag,
+    bool isAnonymous = false,
     String? authorName,
+    String? imageUrl,
   }) async {
     try {
-      final user = supabase.auth.currentUser;
-      if (user == null) {
-        return false;
-      }
+      final userId = supabase.auth.currentUser?.id;
+      if (userId == null) return false;
 
       await supabase.from('community_posts').insert({
-        'user_id': user.id,
-        'author_name': authorName ?? 'Anonyme',
+        'user_id': userId,
         'title': title,
         'content': content,
         'mood_tag': moodTag,
+        'is_anonymous': isAnonymous,
+        'author_name': authorName,
+        'image_url': imageUrl,
       });
 
       return true;
-    } catch (error, stackTrace) {
-      // ignore: avoid_print
-      print('Error creating community post: $error\n$stackTrace');
+    } catch (e) {
+      debugPrint("Erreur createPost : $e");
       return false;
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // RECUPERER LES POSTS AVEC PAGINATION
+  // ---------------------------------------------------------------------------
+
+  Future<List<Map<String, dynamic>>> getPostsPage({
+    required int limit,
+    required int offset,
+    String? moodFilter,
+  }) async {
+    try {
+      final baseQuery = supabase.from('community_posts').select();
+
+      final filteredQuery = (moodFilter != null && moodFilter.isNotEmpty)
+          ? baseQuery.eq('mood_tag', moodFilter)
+          : baseQuery;
+
+      final response = await filteredQuery
+          .order('created_at', ascending: false)
+          .range(offset, offset + limit - 1);
+      return List<Map<String, dynamic>>.from(response);
+    } catch (e) {
+      debugPrint("Erreur getPostsPage : $e");
+      return [];
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> getUserPostsPage({
+    required String userId,
+    required int limit,
+    required int offset,
+    String? moodFilter,
+  }) async {
+    try {
+      final baseQuery = supabase
+          .from('community_posts')
+          .select()
+          .eq('user_id', userId);
+
+      final filteredQuery = (moodFilter != null && moodFilter.isNotEmpty)
+          ? baseQuery.eq('mood_tag', moodFilter)
+          : baseQuery;
+
+      final response = await filteredQuery
+          .order('created_at', ascending: false)
+          .range(offset, offset + limit - 1);
+      return List<Map<String, dynamic>>.from(response);
+    } catch (e) {
+      debugPrint("Erreur getUserPostsPage : $e");
+      return [];
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> getUserLatestPosts({
+    int limit = 3,
+  }) async {
+    try {
+      final user = supabase.auth.currentUser;
+      if (user == null) return [];
+
+      final response = await supabase
+          .from('community_posts')
+          .select()
+          .eq('user_id', user.id)
+          .order('created_at', ascending: false)
+          .limit(limit);
+
+      return List<Map<String, dynamic>>.from(response);
+    } catch (e) {
+      debugPrint("Erreur getUserLatestPosts : $e");
+      return [];
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // LIKE / UNLIKE
+  // ---------------------------------------------------------------------------
 
   Future<bool> hasLikedPost(String postId) async {
-    final user = supabase.auth.currentUser;
-    if (user == null) return false;
-
     try {
-      final res = await supabase
+      final userId = supabase.auth.currentUser?.id;
+      if (userId == null) return false;
+
+      final result = await supabase
           .from('post_likes')
-          .select('post_id')
+          .select('id')
           .eq('post_id', postId)
-          .eq('user_id', user.id)
+          .eq('user_id', userId)
           .maybeSingle();
 
-      return res != null;
-    } catch (error, stackTrace) {
-      // ignore: avoid_print
-      print('Error checking like: $error\n$stackTrace');
+      return result != null;
+    } catch (e) {
+      debugPrint("Erreur hasLikedPost : $e");
       return false;
     }
   }
 
-  /// Retourne true si après l’appel le post est LIKÉ, false s’il est UNLIKÉ.
   Future<bool?> toggleLike(String postId) async {
-    final user = supabase.auth.currentUser;
-    if (user == null) return null;
-
     try {
-      final liked = await hasLikedPost(postId);
+      final userId = supabase.auth.currentUser?.id;
+      if (userId == null) return null;
 
-      final currentRow = await supabase
-          .from('community_posts')
-          .select('likes_count')
-          .eq('id', postId)
+      final existing = await supabase
+          .from('post_likes')
+          .select('id')
+          .eq('post_id', postId)
+          .eq('user_id', userId)
           .maybeSingle();
 
-      int currentLikes = (currentRow?['likes_count'] ?? 0) as int;
-
-      if (!liked) {
+      if (existing == null) {
         await supabase.from('post_likes').insert({
           'post_id': postId,
-          'user_id': user.id,
+          'user_id': userId,
         });
-        currentLikes += 1;
+        return true;
       } else {
-        await supabase
-            .from('post_likes')
-            .delete()
-            .eq('post_id', postId)
-            .eq('user_id', user.id);
-        currentLikes = (currentLikes - 1).clamp(0, 999999);
+        await supabase.from('post_likes').delete().eq('id', existing['id']);
+        return false;
       }
-
-      await supabase
-          .from('community_posts')
-          .update({'likes_count': currentLikes})
-          .eq('id', postId);
-
-      return !liked;
-    } catch (error, stackTrace) {
-      // ignore: avoid_print
-      print('Error toggling like: $error\n$stackTrace');
+    } catch (e) {
+      debugPrint("Erreur toggleLike : $e");
       return null;
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // COMMENTAIRES
+  // ---------------------------------------------------------------------------
 
   Future<List<Map<String, dynamic>>> getCommentsForPost(String postId) async {
     try {
       final res = await supabase
           .from('post_comments')
-          .select('id, post_id, author_name, content, created_at, user_id')
+          .select('id, post_id, author_name, content, created_at, likes_count')
           .eq('post_id', postId)
           .order('created_at', ascending: true);
 
       return (res as List).cast<Map<String, dynamic>>();
-    } catch (error, stackTrace) {
+    } catch (e, st) {
       // ignore: avoid_print
-      print('Error loading comments: $error\n$stackTrace');
+      print('Error getCommentsForPost: $e\n$st');
       return [];
+    }
+  }
+
+  Future<bool> hasLikedComment(String commentId) async {
+    final user = supabase.auth.currentUser;
+    if (user == null) return false;
+
+    try {
+      final res = await supabase
+          .from('comment_likes')
+          .select('id')
+          .eq('comment_id', commentId)
+          .eq('user_id', user.id)
+          .maybeSingle();
+
+      return res != null;
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('Error hasLikedComment: $e\n$st');
+      return false;
+    }
+  }
+
+  Future<bool?> toggleCommentLike(String commentId) async {
+    final user = supabase.auth.currentUser;
+    if (user == null) return null;
+
+    try {
+      final alreadyLiked = await hasLikedComment(commentId);
+
+      final currentRow = await supabase
+          .from('post_comments')
+          .select('likes_count')
+          .eq('id', commentId)
+          .maybeSingle();
+
+      var currentLikes = (currentRow?['likes_count'] ?? 0) as int;
+
+      if (!alreadyLiked) {
+        await supabase.from('comment_likes').insert({
+          'comment_id': commentId,
+          'user_id': user.id,
+        });
+        currentLikes += 1;
+      } else {
+        await supabase
+            .from('comment_likes')
+            .delete()
+            .eq('comment_id', commentId)
+            .eq('user_id', user.id);
+        currentLikes = ((currentLikes - 1).clamp(0, 999999)).toInt();
+      }
+
+      await supabase
+          .from('post_comments')
+          .update({'likes_count': currentLikes})
+          .eq('id', commentId);
+
+      return !alreadyLiked;
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('Error toggleCommentLike: $e\n$st');
+      return null;
     }
   }
 
   Future<Map<String, dynamic>?> addComment({
     required String postId,
     required String content,
-    String? authorName,
   }) async {
-    final user = supabase.auth.currentUser;
-    if (content.trim().isEmpty) return null;
-
     try {
-      final insertPayload = {
-        'post_id': postId,
-        'content': content.trim(),
-        'author_name': authorName ?? 'Anonyme',
-        'user_id': user?.id,
-      };
+      final userId = supabase.auth.currentUser?.id;
+      if (userId == null) return null;
 
       final inserted = await supabase
           .from('post_comments')
-          .insert(insertPayload)
+          .insert({
+            'post_id': postId,
+            'user_id': userId,
+            'content': content,
+          })
           .select()
-          .single();
-
-      final current = await supabase
-          .from('community_posts')
-          .select('comments_count')
-          .eq('id', postId)
           .maybeSingle();
 
-      int currentCount = (current?['comments_count'] ?? 0) as int;
-      currentCount++;
-
-      await supabase
-          .from('community_posts')
-          .update({'comments_count': currentCount})
-          .eq('id', postId);
-
-      return Map<String, dynamic>.from(inserted);
-    } catch (error, stackTrace) {
-      // ignore: avoid_print
-      print('Error adding comment: $error\n$stackTrace');
+      return inserted != null ? Map<String, dynamic>.from(inserted) : null;
+    } catch (e) {
+      debugPrint("Erreur addComment : $e");
       return null;
     }
   }
 
-  Future<Map<String, dynamic>> updateComment({
+  Future<Map<String, dynamic>?> updateComment({
     required String commentId,
     required String newContent,
   }) async {
@@ -231,13 +309,22 @@ class CommunityService {
           .update({'content': newContent})
           .eq('id', commentId)
           .select()
-          .single();
+          .maybeSingle();
 
-      return Map<String, dynamic>.from(updated);
-    } catch (error, stackTrace) {
-      // ignore: avoid_print
-      print('Error updating comment: $error\n$stackTrace');
-      rethrow;
+      return updated != null ? Map<String, dynamic>.from(updated) : null;
+    } catch (e) {
+      debugPrint("Erreur updateComment : $e");
+      return null;
+    }
+  }
+
+  Future<bool> deleteComment(String commentId) async {
+    try {
+      await supabase.from('post_comments').delete().eq('id', commentId);
+      return true;
+    } catch (e) {
+      debugPrint("Erreur deleteComment : $e");
+      return false;
     }
   }
 }

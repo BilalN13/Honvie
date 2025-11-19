@@ -121,18 +121,20 @@ class _HomePageState extends State<HomePage> {
       });
     } catch (e, s) {
       // ignore: avoid_print
-      print('Error loading daily challenge: $e\n$s');
+      print('Error loading daily challenge: $e\\n$s');
 
-      if (!mounted) return;
-      setState(() {
-        _challengeError = "Impossible de charger le défi du jour.";
-        _todayChallenge = null;
-      });
+      if (mounted) {
+        setState(() {
+          _challengeError = "Impossible de charger le défi du jour.";
+          _todayChallenge = null;
+        });
+      }
     } finally {
-      if (!mounted) return;
-      setState(() {
-        _isLoadingChallenge = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoadingChallenge = false;
+        });
+      }
     }
   }
 

@@ -65,10 +65,10 @@ class _ExplorePageState extends State<ExplorePage> {
       _isLoadingMore = false;
     });
 
-    final newPosts = await _service.getPosts(
+    final newPosts = await _service.getPostsPage(
       limit: _pageSize,
       offset: _offset,
-      moodTag: _selectedMood == 'Tous' ? null : _selectedMood,
+      moodFilter: _selectedMood == 'Tous' ? null : _selectedMood,
     );
 
     if (!mounted) return;
@@ -87,10 +87,10 @@ class _ExplorePageState extends State<ExplorePage> {
       _isLoadingMore = true;
     });
 
-    final newPosts = await _service.getPosts(
+    final newPosts = await _service.getPostsPage(
       limit: _pageSize,
       offset: _offset,
-      moodTag: _selectedMood == 'Tous' ? null : _selectedMood,
+      moodFilter: _selectedMood == 'Tous' ? null : _selectedMood,
     );
 
     if (!mounted) return;
@@ -252,7 +252,7 @@ class _ExplorePageState extends State<ExplorePage> {
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.03),
+            color: Colors.black.withValues(alpha: 0.03),
             blurRadius: 14,
             offset: const Offset(0, 6),
           ),
@@ -328,7 +328,7 @@ class _ExplorePageState extends State<ExplorePage> {
                     ),
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(999),
-                      color: _moodChipColor(moodTag).withOpacity(0.12),
+                      color: _moodChipColor(moodTag).withValues(alpha: 0.12),
                     ),
                     child: Text(
                       exploreMoodLabel(moodTag),
@@ -432,4 +432,3 @@ class _ExplorePageState extends State<ExplorePage> {
     }
   }
 }
-

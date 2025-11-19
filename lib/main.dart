@@ -20,6 +20,12 @@ class HonVieApp extends StatelessWidget {
       title: 'HonVie',
       debugShowCheckedModeBanner: false,
       home: const AuthGate(),
+      routes: const {
+        // TODO: Ajouter '/create_post' lorsque l'écran dédié sera disponible.
+        // TODO: Ajouter '/daily_mood' lorsque l'écran de sélection d'humeur sera disponible.
+        // TODO: Ajouter '/challenges' lorsque la page des défis sera créée.
+        // TODO: Ajouter '/places' lorsque la page des lieux visités sera disponible.
+      },
     );
   }
 }

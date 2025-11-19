@@ -1,14 +1,17 @@
+﻿
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-
 import 'package:honvie/features/community/data/community_service.dart';
 import 'package:honvie/features/community/presentation/user_profile_page.dart';
+import 'package:honvie/features/community/presentation/widgets/honvie_like_button.dart';
 
 const Map<String, String> kMoodEmojis = {
   'Joyeux': '😀',
   'Serein': '😌',
   'Triste': '😢',
-  'Stressé': '😰',
+  'Stressé': '😣',
   'Reconnaissant': '🙏',
 };
 
@@ -34,7 +37,17 @@ class _CommunityPageState extends State<CommunityPage> {
   final Map<String, bool> _isLoadingComments = {};
   final TextEditingController _titleController = TextEditingController();
   final TextEditingController _contentController = TextEditingController();
+  final ImagePicker _imagePicker = ImagePicker();
   String _selectedMood = 'Joyeux';
+  final List<String> _feedMoods = const [
+    'Tous',
+    'Joyeux',
+    'Serein',
+    'Triste',
+    'Stressé',
+    'Reconnaissant',
+  ];
+  String _selectedFeedMood = 'Tous';
   bool _isAnonymous = true;
   bool _isSubmitting = false;
   bool _isInitialLoading = false;
@@ -42,6 +55,59 @@ class _CommunityPageState extends State<CommunityPage> {
   bool _hasMore = true;
   final int _pageSize = 10;
   int _currentOffset = 0;
+  XFile? _selectedImage;
+  Uint8List? _selectedImageBytes;
+  String? _selectedImageExtension;
+
+  String? get _activeMoodFilter =>
+      _selectedFeedMood == 'Tous' ? null : _selectedFeedMood;
+
+  Future<void> _pickImage() async {
+    try {
+      final picked = await _imagePicker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 2048,
+        maxHeight: 2048,
+        imageQuality: kIsWeb ? null : 85,
+      );
+
+      if (picked == null) return;
+
+      final bytes = await picked.readAsBytes();
+      final ext = _extractExtension(picked);
+      if (!mounted) return;
+
+      setState(() {
+        _selectedImage = picked;
+        _selectedImageBytes = bytes;
+        _selectedImageExtension = ext;
+      });
+    } catch (error, stackTrace) {
+      debugPrint('Error picking image: $error\n$stackTrace');
+    }
+  }
+
+  void _clearSelectedImage() {
+    setState(() {
+      _selectedImage = null;
+      _selectedImageBytes = null;
+      _selectedImageExtension = null;
+    });
+  }
+
+  String _extractExtension(XFile file) {
+    final name = file.name;
+    final mime = file.mimeType ?? '';
+    if (name.contains('.')) {
+      final ext = name.split('.').last.toLowerCase();
+      if (ext.isNotEmpty) return ext;
+    }
+    if (mime.contains('/')) {
+      final ext = mime.split('/').last.toLowerCase();
+      if (ext.isNotEmpty) return ext;
+    }
+    return 'jpg';
+  }
 
   Future<void> _openCommentsSheet(Map<String, dynamic> post) async {
     final postId = post['id']?.toString();
@@ -148,6 +214,7 @@ class _CommunityPageState extends State<CommunityPage> {
     final newPosts = await _service.getPostsPage(
       limit: _pageSize,
       offset: _currentOffset,
+      moodFilter: _activeMoodFilter,
     );
 
     if (!mounted) return;
@@ -172,6 +239,7 @@ class _CommunityPageState extends State<CommunityPage> {
     final newPosts = await _service.getPostsPage(
       limit: _pageSize,
       offset: _currentOffset,
+      moodFilter: _activeMoodFilter,
     );
 
     if (!mounted) return;
@@ -308,16 +376,20 @@ class _CommunityPageState extends State<CommunityPage> {
           ),
         ),
         child: SafeArea(
-          child: _isInitialLoading && _posts.isEmpty
-              ? const Center(child: CircularProgressIndicator())
-              : Column(
-                  children: [
-                    const SizedBox(height: 12),
-                    _buildShareButton(),
-                    const SizedBox(height: 12),
-                    Expanded(child: _buildPostsList()),
-                  ],
-                ),
+          child: Column(
+            children: [
+              const SizedBox(height: 12),
+              _buildShareButton(),
+              const SizedBox(height: 12),
+              _buildMoodFilterChips(),
+              const SizedBox(height: 12),
+              Expanded(
+                child: _isInitialLoading && _posts.isEmpty
+                    ? const Center(child: CircularProgressIndicator())
+                    : _buildPostsList(),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -343,6 +415,39 @@ class _CommunityPageState extends State<CommunityPage> {
         ),
       ),
     );
+  }
+
+  Widget _buildMoodFilterChips() {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Row(
+        children: _feedMoods.map((mood) {
+          final isSelected = _selectedFeedMood == mood;
+          return Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: ChoiceChip(
+              label: Text(moodLabel(mood)),
+              selected: isSelected,
+              onSelected: (_) => _onFeedMoodSelected(mood),
+              selectedColor: const Color(0xFFFFE4F2),
+              backgroundColor: Colors.white,
+              labelStyle: TextStyle(
+                color: isSelected ? Colors.pinkAccent : Colors.black87,
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  void _onFeedMoodSelected(String mood) {
+    if (_selectedFeedMood == mood) return;
+    setState(() {
+      _selectedFeedMood = mood;
+    });
+    _loadInitialPosts();
   }
 
   Widget _buildPostsList() {
@@ -430,6 +535,7 @@ class _CommunityPageState extends State<CommunityPage> {
     final likes = (post['likes_count'] ?? 0) as int;
     final comments = (post['comments_count'] ?? 0) as int;
     final authorId = post['user_id']?.toString();
+    final imageUrl = (post['image_url'] as String?)?.trim();
 
     return Container(
       decoration: BoxDecoration(
@@ -437,7 +543,7 @@ class _CommunityPageState extends State<CommunityPage> {
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.03),
+            color: Colors.black.withValues(alpha: 0.03),
             blurRadius: 14,
             offset: const Offset(0, 6),
           ),
@@ -512,6 +618,28 @@ class _CommunityPageState extends State<CommunityPage> {
               const SizedBox(height: 4),
             ],
             Text(content, style: const TextStyle(fontSize: 14, height: 1.35)),
+            if (imageUrl != null && imageUrl.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: AspectRatio(
+                  aspectRatio: 1,
+                  child: Image.network(
+                    imageUrl,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Container(
+                      color: Colors.grey.shade200,
+                      alignment: Alignment.center,
+                      child: const Icon(
+                        Icons.broken_image_outlined,
+                        color: Colors.grey,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
             const SizedBox(height: 10),
             Row(
               children: [
@@ -523,7 +651,7 @@ class _CommunityPageState extends State<CommunityPage> {
                     ),
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(999),
-                      color: _moodChipColor(moodTag).withOpacity(0.12),
+                      color: _moodChipColor(moodTag).withValues(alpha: 0.12),
                     ),
                     child: Text(
                       moodLabel(moodTag),
@@ -536,62 +664,13 @@ class _CommunityPageState extends State<CommunityPage> {
                 const Spacer(),
                 Row(
                   children: [
-                    GestureDetector(
-                      onTap: postId.isEmpty ? null : () => _onLikeTap(postId),
-                      child: Row(
-                        children: [
-                          AnimatedSwitcher(
-                            duration: const Duration(milliseconds: 200),
-                            transitionBuilder: (child, animation) {
-                              return ScaleTransition(
-                                scale: Tween(begin: 0.9, end: 1.0).animate(
-                                  CurvedAnimation(
-                                    parent: animation,
-                                    curve: Curves.easeOutBack,
-                                  ),
-                                ),
-                                child: child,
-                              );
-                            },
-                            child: Icon(
-                              isLiked ? Icons.favorite : Icons.favorite_border,
-                              key: ValueKey<bool>(isLiked),
-                              size: 18,
-                              color: isLiked
-                                  ? Colors.pinkAccent
-                                  : Colors.grey.shade600,
-                            ),
-                          ),
-                          const SizedBox(width: 4),
-                          AnimatedSwitcher(
-                            duration: const Duration(milliseconds: 200),
-                            transitionBuilder: (child, animation) {
-                              return ScaleTransition(
-                                scale: Tween(begin: 0.9, end: 1.0).animate(
-                                  CurvedAnimation(
-                                    parent: animation,
-                                    curve: Curves.easeOutBack,
-                                  ),
-                                ),
-                                child: child,
-                              );
-                            },
-                            child: Text(
-                              likes.toString(),
-                              key: ValueKey<int>(likes),
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: isLiked
-                                    ? Colors.pinkAccent
-                                    : Colors.grey.shade700,
-                                fontWeight: isLiked
-                                    ? FontWeight.w600
-                                    : FontWeight.normal,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
+                    HonvieLikeButton(
+                      isLiked: isLiked,
+                      likeCount: likes,
+                      onToggleLike: () {
+                        if (postId.isEmpty) return;
+                        _onLikeTap(postId);
+                      },
                     ),
                     const SizedBox(width: 12),
                     GestureDetector(
@@ -704,6 +783,39 @@ class _CommunityPageState extends State<CommunityPage> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 12),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    ElevatedButton.icon(
+                      onPressed: _isSubmitting ? null : _pickImage,
+                      icon: const Icon(Icons.add_a_photo_outlined),
+                      label: const Text('Ajouter une photo'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.pinkAccent,
+                        foregroundColor: Colors.white,
+                      ),
+                    ),
+                    if (_selectedImageBytes != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8.0),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(16),
+                          child: Image.memory(
+                            _selectedImageBytes!,
+                            height: 120,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                      ),
+                    if (_selectedImage != null)
+                      TextButton.icon(
+                        onPressed: _isSubmitting ? null : _clearSelectedImage,
+                        icon: const Icon(Icons.delete_outline),
+                        label: const Text('Supprimer la photo'),
+                      ),
+                  ],
+                ),
                 const SizedBox(height: 8),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
@@ -749,6 +861,8 @@ class _CommunityPageState extends State<CommunityPage> {
   }
 
   Future<void> _submitPost() async {
+    if (_isSubmitting) return;
+
     final title = _titleController.text.trim();
     final content = _contentController.text.trim();
 
@@ -765,39 +879,75 @@ class _CommunityPageState extends State<CommunityPage> {
       _isSubmitting = true;
     });
 
+    String? imageUrl;
+
+    // 1) Si une image est sélectionnée, on tente l’upload
+    if (_selectedImageBytes != null && _selectedImageExtension != null) {
+      final fileName =
+          'post_${DateTime.now().millisecondsSinceEpoch}.$_selectedImageExtension';
+
+      final uploadedUrl = await _service.uploadPostImage(
+        bytes: _selectedImageBytes!,
+        path: fileName,
+        contentType: _selectedImageExtension?.toLowerCase() == 'png'
+            ? 'image/png'
+            : 'image/jpeg',
+      );
+
+      if (uploadedUrl == null) {
+        // Upload KO -> on prévient l'utilisateur mais on CONTINUE
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Impossible de téléverser la photo. Le post sera publié sans image.',
+              ),
+            ),
+          );
+        }
+      } else {
+        imageUrl = uploadedUrl;
+      }
+    }
+
+    // 2) Création du post (avec ou sans imageUrl)
     final success = await _service.createPost(
       title: title,
       content: content,
       moodTag: _selectedMood,
-      authorName: _isAnonymous ? 'Anonyme' : null,
+      authorName: _isAnonymous ? null : 'Utilisateur Solo',
+      imageUrl: imageUrl,
     );
-
-    setState(() {
-      _isSubmitting = false;
-    });
 
     if (!mounted) return;
 
     if (success) {
       _titleController.clear();
       _contentController.clear();
+      setState(() {
+        _selectedImage = null;
+        _selectedImageBytes = null;
+        _selectedImageExtension = null;
+        _isAnonymous = true;
+      });
 
       Navigator.of(context).pop();
 
-      await _loadPosts();
-
-      if (!mounted) return;
-
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Votre histoire a été publiée.')),
+        const SnackBar(content: Text('Histoire publiée !')),
       );
+
+      await _loadPosts();
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Erreur lors de la publication.')),
       );
     }
-  }
 
+    setState(() {
+      _isSubmitting = false;
+    });
+  }
   String _formatDate(String? isoString) {
     if (isoString == null) return '';
     try {
@@ -868,12 +1018,11 @@ class _CommentsSheet extends StatefulWidget {
   final void Function(Map<String, dynamic> deletedComment)? onDeleteComment;
 
   const _CommentsSheet({
-    Key? key,
     required this.post,
     required this.initialComments,
     required this.onAddComment,
     this.onDeleteComment,
-  }) : super(key: key);
+  });
 
   @override
   State<_CommentsSheet> createState() => _CommentsSheetState();
@@ -884,11 +1033,36 @@ class _CommentsSheetState extends State<_CommentsSheet> {
   final TextEditingController _commentController = TextEditingController();
   bool _isSending = false;
   final CommunityService _communityService = const CommunityService();
+  final Map<String, bool> _commentLikedByUser = {};
+  final Map<String, int> _commentLikesCount = {};
 
   @override
   void initState() {
     super.initState();
     _comments = List<Map<String, dynamic>>.from(widget.initialComments);
+    _hydrateCommentMeta(_comments);
+  }
+
+  Future<void> _hydrateCommentMeta(List<Map<String, dynamic>> comments) async {
+    final likedMap = <String, bool>{};
+    final countMap = <String, int>{};
+
+    await Future.wait(comments.map((comment) async {
+      final id = comment['id']?.toString();
+      if (id == null || id.isEmpty) return;
+      countMap[id] = (comment['likes_count'] ?? 0) as int;
+      likedMap[id] = await _communityService.hasLikedComment(id);
+    }));
+
+    if (!mounted) return;
+    setState(() {
+      _commentLikesCount
+        ..clear()
+        ..addAll(countMap);
+      _commentLikedByUser
+        ..clear()
+        ..addAll(likedMap);
+    });
   }
 
   Future<void> _submitComment() async {
@@ -916,6 +1090,11 @@ class _CommentsSheetState extends State<_CommentsSheet> {
       if (newComment != null) {
         setState(() {
           _comments.insert(0, newComment);
+          final newId = newComment['id']?.toString();
+          if (newId != null && newId.isNotEmpty) {
+            _commentLikedByUser[newId] = false;
+            _commentLikesCount[newId] = (newComment['likes_count'] ?? 0) as int;
+          }
         });
         widget.onAddComment(newComment);
         _commentController.clear();
@@ -980,6 +1159,9 @@ class _CommentsSheetState extends State<_CommentsSheet> {
                   height: 46,
                   child: ElevatedButton(
                     onPressed: () async {
+                      final navigator = Navigator.of(context);
+                      final scaffoldMessenger = ScaffoldMessenger.of(context);
+
                       final newContent = controller.text.trim();
                       if (newContent.isEmpty) return;
 
@@ -994,6 +1176,17 @@ class _CommentsSheetState extends State<_CommentsSheet> {
                             );
 
                         if (!mounted) return;
+                        if (updatedComment == null) {
+                          scaffoldMessenger.showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                "Impossible de modifier le commentaire.",
+                              ),
+                            ),
+                          );
+                          return;
+                        }
+
                         setState(() {
                           final index = _comments.indexWhere(
                             (c) => c['id'] == updatedComment['id'],
@@ -1003,7 +1196,8 @@ class _CommentsSheetState extends State<_CommentsSheet> {
                           }
                         });
 
-                        Navigator.of(context).pop();
+                        if (!mounted) return;
+                        navigator.pop();
                       } catch (error, stackTrace) {
                         debugPrint(
                           'Error updating comment: $error\n$stackTrace',
@@ -1029,7 +1223,7 @@ class _CommentsSheetState extends State<_CommentsSheet> {
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: const Text('Supprimer le commentaire ?'),
+          title: const Text('Communauté'),
           content: const Text('Cette action est définitive.'),
           actions: [
             TextButton(
@@ -1082,6 +1276,9 @@ class _CommentsSheetState extends State<_CommentsSheet> {
       if (!mounted) return;
       setState(() {
         _comments.removeWhere((c) => c['id'] == commentId);
+        final idStr = commentId.toString();
+        _commentLikedByUser.remove(idStr);
+        _commentLikesCount.remove(idStr);
       });
 
       widget.onDeleteComment?.call(comment);
@@ -1110,62 +1307,178 @@ class _CommentsSheetState extends State<_CommentsSheet> {
     final createdAt = comment['created_at']?.toString();
     final updatedAt = comment['updated_at'];
     final isOwner = _canEdit(comment);
+    final commentId = comment['id']?.toString();
+    final likesCount = commentId != null
+        ? (_commentLikesCount[commentId] ??
+            ((comment['likes_count'] ?? 0) as int))
+        : (comment['likes_count'] ?? 0) as int;
+    final isLiked =
+        commentId != null ? (_commentLikedByUser[commentId] ?? false) : false;
 
     return GestureDetector(
       onLongPress: isOwner ? () => _openEditCommentSheet(comment) : null,
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(vertical: 6),
-        leading: Container(
-          width: 32,
-          height: 32,
-          decoration: const BoxDecoration(
-            shape: BoxShape.circle,
-            color: Color(0xFFFFE4F2),
-          ),
-          child: const Icon(Icons.person, size: 18, color: Colors.pinkAccent),
-        ),
-        title: Row(
-          children: [
-            Text(
-              author,
-              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-            ),
-            const SizedBox(width: 6),
-            if (createdAt != null)
-              Text(
-                _formatDate(createdAt),
-                style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
-              ),
-          ],
-        ),
-        subtitle: Column(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+        child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(content, style: const TextStyle(fontSize: 13)),
-            if (updatedAt != null)
-              const Text(
-                'Modifié',
-                style: TextStyle(fontSize: 11, color: Colors.grey),
+            Container(
+              width: 32,
+              height: 32,
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                color: Color(0xFFFFE4F2),
               ),
+              child: const Icon(Icons.person, size: 18, color: Colors.pinkAccent),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                author,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 13,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            if (createdAt != null)
+                              Text(
+                                _formatDate(createdAt),
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.grey.shade600,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      if (isOwner)
+                        PopupMenuButton<String>(
+                          padding: EdgeInsets.zero,
+                          iconSize: 18,
+                          onSelected: (value) {
+                            if (value == 'edit') {
+                              _openEditCommentSheet(comment);
+                            } else if (value == 'delete') {
+                              _confirmDeleteComment(comment);
+                            }
+                          },
+                          itemBuilder: (context) => const [
+                            PopupMenuItem(value: 'edit', child: Text('Modifier')),
+                            PopupMenuItem(value: 'delete', child: Text('Supprimer')),
+                          ],
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    content,
+                    style: const TextStyle(fontSize: 13, height: 1.4),
+                  ),
+                  if (updatedAt != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        'Modifié',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.grey.shade500,
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            TweenAnimationBuilder<double>(
+              tween: Tween(begin: 1.0, end: isLiked ? 1.2 : 1.0),
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOut,
+              builder: (context, scale, child) {
+                return Transform.scale(scale: scale, child: child);
+              },
+              child: GestureDetector(
+                onTap: commentId == null
+                    ? null
+                    : () => _onToggleCommentLike(comment),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.favorite,
+                      size: 18,
+                      color: isLiked ? Colors.pinkAccent : Colors.grey.shade400,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      likesCount.toString(),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: isLiked
+                            ? Colors.pinkAccent
+                            : Colors.grey.shade400,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ],
         ),
-        trailing: isOwner
-            ? PopupMenuButton<String>(
-                onSelected: (value) {
-                  if (value == 'edit') {
-                    _openEditCommentSheet(comment);
-                  } else if (value == 'delete') {
-                    _confirmDeleteComment(comment);
-                  }
-                },
-                itemBuilder: (context) => const [
-                  PopupMenuItem(value: 'edit', child: Text('Modifier')),
-                  PopupMenuItem(value: 'delete', child: Text('Supprimer')),
-                ],
-              )
-            : null,
       ),
     );
+  }
+
+  Future<void> _onToggleCommentLike(Map<String, dynamic> comment) async {
+    final commentId = comment['id']?.toString();
+    if (commentId == null || commentId.isEmpty) return;
+
+    final currentLiked = _commentLikedByUser[commentId] ?? false;
+    final currentCount = _commentLikesCount[commentId] ??
+        ((comment['likes_count'] ?? 0) as int);
+
+    final nextLiked = !currentLiked;
+    final nextCount = nextLiked
+        ? currentCount + 1
+        : ((currentCount - 1).clamp(0, 999999)).toInt();
+
+    setState(() {
+      _commentLikedByUser[commentId] = nextLiked;
+      _commentLikesCount[commentId] = nextCount;
+      comment['likes_count'] = nextCount;
+    });
+
+    final result = await _communityService.toggleCommentLike(commentId);
+
+    if (result == null) {
+      if (!mounted) return;
+      setState(() {
+        _commentLikedByUser[commentId] = currentLiked;
+        _commentLikesCount[commentId] = currentCount;
+        comment['likes_count'] = currentCount;
+      });
+    } else if (result != nextLiked && mounted) {
+      final correctedCount = result
+          ? currentCount + 1
+          : ((currentCount - 1).clamp(0, 999999)).toInt();
+      setState(() {
+        _commentLikedByUser[commentId] = result;
+        _commentLikesCount[commentId] = correctedCount;
+        comment['likes_count'] = correctedCount;
+      });
+    }
   }
 
   @override
@@ -1293,3 +1606,13 @@ class _CommentsSheetState extends State<_CommentsSheet> {
     );
   }
 }
+
+
+
+
+
+
+
+
+
+
