@@ -1,0 +1,24 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Honvie Web (Chrome)",
+      "request": "launch",
+      "type": "dart",
+      "deviceId": "chrome",
+      "flutterMode": "debug",
+      "toolArgs": [
+        "--dart-define=GOOGLE_PLACES_API_KEY=AIzaSyDifZnjX2766t7J1QRlR2cq0BW9B0qGV4I"
+      ]
+    },
+    {
+      "name": "Honvie Mobile (Current Device)",
+      "request": "launch",
+      "type": "dart",
+      "flutterMode": "debug",
+      "toolArgs": [
+        "--dart-define=GOOGLE_PLACES_API_KEY=AIzaSyDifZnjX2766t7J1QRlR2cq0BW9B0qGV4I"
+      ]
+    }
+  ]
+}
