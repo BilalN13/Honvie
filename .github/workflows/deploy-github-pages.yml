@@ -1,0 +1,73 @@
+name: Deploy Flutter Web To GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Enable Flutter web
+        run: flutter config --enable-web
+
+      - name: Write Google Maps web runtime config
+        shell: bash
+        env:
+          GOOGLE_MAPS_JS_API_KEY: ${{ secrets.GOOGLE_MAPS_JS_API_KEY }}
+        run: |
+          if [ -n "$GOOGLE_MAPS_JS_API_KEY" ]; then
+            cat > web/google_maps_config.js <<EOF
+          window.__honvieGoogleMapsApiKey = '$GOOGLE_MAPS_JS_API_KEY';
+          EOF
+          else
+            cat > web/google_maps_config.js <<'EOF'
+          window.__honvieGoogleMapsApiKey = '';
+          console.warn(
+            'Honvie Web: GOOGLE_MAPS_JS_API_KEY GitHub secret is absent. Explorer will stay in fallback mode.'
+          );
+          EOF
+          fi
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      - name: Build Flutter web for GitHub Pages
+        run: flutter build web --release --base-href /Honvie/
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

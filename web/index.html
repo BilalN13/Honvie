@@ -35,11 +35,13 @@
     window.__honvieGoogleMapsConfigMissing = false;
     window.__honvieGoogleMapsConfigLoaded = false;
     window.__honvieGoogleMapsScriptRequested = false;
+    window.__honvieExpectedGoogleMapsConfigUrl =
+      new URL('google_maps_config.js', document.baseURI).href;
   </script>
   <script
     src="google_maps_config.js"
     onload="window.__honvieGoogleMapsConfigLoaded = true; console.log('Honvie Web: web/google_maps_config.js loaded.');"
-    onerror="window.__honvieGoogleMapsConfigMissing = true; console.warn('Honvie Web: web/google_maps_config.js is missing.');"
+    onerror="window.__honvieGoogleMapsConfigMissing = true; console.warn('Honvie Web: web/google_maps_config.js is missing at ' + window.__honvieExpectedGoogleMapsConfigUrl + '. Explorer will stay in fallback mode.');"
   ></script>
   <script>
     window.__honvieGoogleMapsConfigMissing =
@@ -69,7 +71,11 @@
       if (window.__honvieGoogleMapsConfigMissing) {
         window.__honvieGoogleMapsLoaded = false;
         window.__honvieGoogleMapsError = 'google_maps_web_config_missing';
-        console.warn('Honvie Web: Google Maps web config is missing.');
+        console.warn(
+          'Honvie Web: Google Maps web config is missing at ' +
+            window.__honvieExpectedGoogleMapsConfigUrl +
+            '. Explorer will stay in fallback mode.'
+        );
         return;
       }
 

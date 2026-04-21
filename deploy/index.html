@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <!--
+    If you are serving your web app in a path other than the root, change the
+    href value below to reflect the base path you are serving from.
+
+    The path provided below has to start and end with a slash "/" in order for
+    it to work correctly.
+
+    For more details:
+    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
+
+    This is a placeholder for base href that will be replaced by the value of
+    the `--base-href` argument provided to `flutter build`.
+  -->
+  <base href="/Honvie/">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="A new Flutter project.">
+
+  <!-- iOS meta tags & icons -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="honvie_v2">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <script>
+    window.__honvieGoogleMapsLoaded = false;
+    window.__honvieGoogleMapsError = null;
+    window.__honvieGoogleMapsConfigMissing = false;
+    window.__honvieGoogleMapsConfigLoaded = false;
+    window.__honvieGoogleMapsScriptRequested = false;
+    window.__honvieExpectedGoogleMapsConfigUrl =
+      new URL('google_maps_config.js', document.baseURI).href;
+  </script>
+  <script
+    src="google_maps_config.js"
+    onload="window.__honvieGoogleMapsConfigLoaded = true; console.log('Honvie Web: web/google_maps_config.js loaded.');"
+    onerror="window.__honvieGoogleMapsConfigMissing = true; console.warn('Honvie Web: web/google_maps_config.js is missing at ' + window.__honvieExpectedGoogleMapsConfigUrl + '. Explorer will stay in fallback mode.');"
+  ></script>
+  <script>
+    window.__honvieGoogleMapsConfigMissing =
+      window.__honvieGoogleMapsConfigMissing === true;
+
+    window.__honvieOnGoogleMapsLoaded = function () {
+      window.__honvieGoogleMapsLoaded =
+        !!(window.google && window.google.maps);
+      window.__honvieGoogleMapsError = window.__honvieGoogleMapsLoaded
+        ? null
+        : 'google_maps_namespace_unavailable';
+      console.log(
+        'Honvie Web: Google Maps JS script loaded =',
+        window.__honvieGoogleMapsLoaded
+      );
+    };
+
+    window.__honvieOnGoogleMapsError = function () {
+      window.__honvieGoogleMapsLoaded = false;
+      window.__honvieGoogleMapsError = 'google_maps_script_load_failed';
+      console.error('Honvie Web: Google Maps JS script failed to load.');
+    };
+
+    window.__honvieLoadGoogleMapsScript = function () {
+      const mapsApiKey = window.__honvieGoogleMapsApiKey;
+
+      if (window.__honvieGoogleMapsConfigMissing) {
+        window.__honvieGoogleMapsLoaded = false;
+        window.__honvieGoogleMapsError = 'google_maps_web_config_missing';
+        console.warn(
+          'Honvie Web: Google Maps web config is missing at ' +
+            window.__honvieExpectedGoogleMapsConfigUrl +
+            '. Explorer will stay in fallback mode.'
+        );
+        return;
+      }
+
+      if (!mapsApiKey) {
+        window.__honvieGoogleMapsLoaded = false;
+        window.__honvieGoogleMapsError =
+          'google_maps_api_key_missing_in_web_config';
+        console.warn('Honvie Web: Google Maps web key is missing.');
+        return;
+      }
+
+      console.log('Honvie Web: Google Maps web key found in local config.');
+
+      const existingScript = document.getElementById('honvie-google-maps-js');
+      if (existingScript) {
+        console.log('Honvie Web: Google Maps JS script already requested.');
+        return;
+      }
+
+      window.__honvieGoogleMapsScriptRequested = true;
+      console.log('Honvie Web: Injecting Google Maps JS script.');
+
+      const script = document.createElement('script');
+      script.id = 'honvie-google-maps-js';
+      script.async = true;
+      script.defer = true;
+      script.src =
+        'https://maps.googleapis.com/maps/api/js?key=' +
+        encodeURIComponent(mapsApiKey) +
+        '&loading=async&callback=__honvieOnGoogleMapsLoaded';
+      script.onerror = window.__honvieOnGoogleMapsError;
+      document.head.appendChild(script);
+    };
+
+    window.__honvieLoadGoogleMapsScript();
+  </script>
+
+  <title>honvie_v2</title>
+  <link rel="manifest" href="manifest.json">
+</head>
+<body>
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>
